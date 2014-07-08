@@ -43,7 +43,7 @@ class DocumentationGenerator(object):
                     method_introspector.get_http_method() == "OPTIONS":
                 continue  # No one cares. I impose JSON.
 
-            serializer = method_introspector.get_serializer_class()
+            serializer = method_introspector.get_response_serializer_class()
             serializer_name = IntrospectorHelper.get_serializer_name(serializer)
 
             operation = {

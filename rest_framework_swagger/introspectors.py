@@ -3,8 +3,8 @@ from abc import ABCMeta, abstractmethod
 import re
 
 from django.contrib.admindocs.utils import trim_docstring
-
 from rest_framework.views import get_view_name, get_view_description
+from rest_framework.viewsets import ModelViewSet
 
 
 def get_resolved_value(obj, attr, default=None):
@@ -90,6 +90,9 @@ class BaseMethodIntrospector(object):
     def get_serializer_class(self):
         return self.parent.get_serializer_class()
 
+    def get_response_serializer_class(self):
+        return self.parent.get_serializer_class()
+
     def get_summary(self):
         docs = self.get_docs()
 
@@ -169,6 +172,8 @@ class BaseMethodIntrospector(object):
         return getattr(self.callback, method).__doc__
 
     def build_body_parameters(self):
+        if "**overrides**" in (self.get_docs() or ""):
+            return None
         serializer = self.get_serializer_class()
         serializer_name = IntrospectorHelper.get_serializer_name(serializer)
 
@@ -198,11 +203,53 @@ class BaseMethodIntrospector(object):
 
         return params
 
+    def get_custom_params(self, section="query", docs=None):
+        docs = docs or self.get_docs()
+        if not docs:
+            return None, []
+        section_re = re.compile("\s*--\s*{}\s*--\s*".format(section))
+        other_section_re = re.compile(".*--[^-]*--.*")
+        overrides_re = re.compile(".*\*\*\s*overrides\s*\*\*.*")
+
+        in_section = False
+        overrides = False
+
+        params = []
+        for line in map(lambda s: s.strip(), docs.split('\n')):
+            if section_re.match(line):
+                in_section = True
+                continue
+            if overrides_re.match(line):
+                overrides = True
+                continue
+            if in_section and other_section_re.match(line):
+                break
+            if in_section:
+                res = re.search("\s*?(?P<required>\*)?\s*(?P<name>[^\*]*?)\s*--\s*(?P<description>.*)\s*", line)
+                if not res:
+                    continue
+                param = res.groupdict()
+                param['required'] = bool(param['required'])
+                params.append(param)
+
+        return overrides, params
+
+
     def build_form_parameters(self):
         """
         Builds form parameters from the serializer class
         """
         data = []
+        overrides, params = self.get_custom_params('form')
+        for param in params:
+            param.update({
+                'paramType': 'form',
+                'dataType': ''
+            })
+            data.append(param)
+
+        if overrides:
+            return data
         serializer = self.get_serializer_class()
 
         if serializer is None:
@@ -227,36 +274,38 @@ class BaseMethodIntrospector(object):
                     'valueType': 'RANGE'
                 }
 
-            data.append({
+            #when partial update all fields must not be reguired and not to have values
+            if self.method == 'partial_update':
+                required = False
+                default_value = None
+            else:
+                required = getattr(field, 'required', None)
+                default_value = get_resolved_value(field, 'default')
+            param = {
                 'paramType': 'form',
                 'name': name,
                 'dataType': data_type,
                 'allowableValues': allowable_values,
                 'description': getattr(field, 'help_text', ''),
-                'defaultValue': get_resolved_value(field, 'default'),
-                'required': getattr(field, 'required', None)
-            })
+                'defaultValue': default_value,
+                'required': required
+            }
+            # if not isinstance(field, RelatedField) and getattr(field, 'choices', None):
+            # param['enum'] = list(map(lambda s: s[0], getattr(field, 'choices')))
+            data.append(param)
 
         return data
 
     def build_query_params_from_docstring(self):
-        params = []
 
-        docstring = self.retrieve_docstring() if None else ''
-        docstring += "\n" + get_view_description(self.callback)
 
-        if docstring is None:
-            return params
+        _, params = self.get_custom_params('query')
 
-        split_lines = docstring.split('\n')
-
-        for line in split_lines:
-            param = line.split(' -- ')
-            if len(param) == 2:
-                params.append({'paramType': 'query',
-                               'name': param[0].strip(),
-                               'description': param[1].strip(),
-                               'dataType': ''})
+        for param in params:
+            param.updata({
+                'paramType': 'query',
+                'dataType': ''
+            })
 
         return params
 
@@ -277,6 +326,9 @@ class APIViewMethodIntrospector(BaseMethodIntrospector):
         """
         return self.retrieve_docstring()
 
+    def get_serializer_class(self):
+        return super(APIViewMethodIntrospector, self).get_serializer_class()
+
 
 class ViewSetIntrospector(BaseViewIntrospector):
     """Handle ViewSet introspection."""
@@ -290,7 +342,7 @@ class ViewSetIntrospector(BaseViewIntrospector):
         if not hasattr(self.pattern.callback, 'func_code') or \
                 not hasattr(self.pattern.callback, 'func_closure') or \
                 not hasattr(self.pattern.callback.func_code, 'co_freevars') or \
-                'actions' not in self.pattern.callback.func_code.co_freevars:
+                        'actions' not in self.pattern.callback.func_code.co_freevars:
             raise RuntimeError('Unable to use callback invalid closure/function specified.')
 
         idx = self.pattern.callback.func_code.co_freevars.index('actions')
@@ -312,4 +364,28 @@ class ViewSetMethodIntrospector(BaseMethodIntrospector):
         will be used
         """
         return self.retrieve_docstring()
+
+    def get_summary(self):
+        docs = self.get_docs()
+
+        # If there is no docstring on the method, get class docs
+        if docs is None:
+            a = getattr(self.callback, self.method)
+            b = getattr(ModelViewSet, self.method, None)
+            if a == b:
+                docs = "{action} model {model}".format(action=self.method.title().replace('_', ' '),
+                                                       model=get_view_name(self.callback))
+            else:
+                docs = self.parent.get_description()
+        docs = trim_docstring(docs).split('\n')[0]
+
+        return docs
+
+    def get_serializer_class(self):
+        if hasattr(self.callback, 'get_serializer_class'):
+            cls = self.parent.callback
+            inst = cls()
+            inst.action = self.method
+            return inst.get_serializer_class()
+
 

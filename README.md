@@ -3,6 +3,28 @@
 
 For older versions of Django REST Framework, see [Django REST Framework Docs](https://github.com/marcgibbons/django-rest-framework-docs)
 
+## Changes
+
+Modified seagger.js: added support for name of resource
+Added additional syntax for method documentation:
+- query and form param, defined by line `-- query --` or `-- form --` before parameter list.
+- required parameter can have asterisk `*` before name of parameter
+- override all parameters by appending line `** overrides **`
+Example
+	```python
+		def authorize(self, request, *args, **kwargs):
+	        """
+	        Authorize user
+	        -- form --
+	        ** overrides **
+	        * username -- Username
+	        * password -- Password
+	        """
+	        #body here	
+	```
+ 
+
+
 ## Installation
 From PyPI: `pip install django-rest-swagger`
 

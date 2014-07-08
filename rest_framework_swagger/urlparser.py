@@ -1,3 +1,4 @@
+import re
 import os
 
 from django.conf import settings
@@ -11,7 +12,6 @@ from .apidocview import APIDocView
 
 
 class UrlParser(object):
-
     def get_apis(self, patterns=None, filter_path=None, exclude_namespaces=[]):
         """
         Returns all the DRF APIViews found in the project URLs
@@ -37,8 +37,8 @@ class UrlParser(object):
         filtered_list = []
 
         for api in apis:
-            if filter_path in api['path'].strip('/'):
-                filtered_list.append(api)
+            if filter_path in api['path'].strip('/'): \
+                    filtered_list.append(api)
 
         return filtered_list
 
@@ -52,11 +52,12 @@ class UrlParser(object):
         api_paths = [endpoint['path'].strip("/") for endpoint in apis]
 
         for path in api_paths:
-            #  If a URLs /resource/ and /resource/{pk} exist, use the base
-            #  as the resource. If there is no base resource URL, then include
-            path_base = path.split('/{')[0]
-            if '{' in path and path_base in api_paths:
+            # If a URLs /resource/ and /resource/{pk} exist, use the base
+            # as the resource. If there is no base resource URL, then include
+            match = re.search(r"(?P<resource>[^/]*?)/\{(?P<key>[^/]*?)\}/?$", path)
+            if not match:
                 continue
+            path_base = match.groupdict()['resource']
             root_paths.add(path_base)
 
         top_level_apis = self.__filter_top_level_apis__(root_paths)
@@ -165,8 +166,8 @@ class UrlParser(object):
             return pattern.callback.cls
 
         elif (hasattr(pattern.callback, 'cls_instance') and
-                isinstance(pattern.callback.cls_instance, APIView) and
-                not issubclass(pattern.callback.cls_instance, APIDocView)):
+                  isinstance(pattern.callback.cls_instance, APIView) and
+                  not issubclass(pattern.callback.cls_instance, APIDocView)):
 
             return pattern.callback.cls_instance
 
